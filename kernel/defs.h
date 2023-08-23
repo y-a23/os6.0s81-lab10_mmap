@@ -9,6 +9,8 @@ struct sleeplock;
 struct stat;
 struct superblock;
 
+pte_t *
+walk(pagetable_t pagetable, uint64 va, int alloc);
 // bio.c
 void            binit(void);
 struct buf*     bread(uint, uint);

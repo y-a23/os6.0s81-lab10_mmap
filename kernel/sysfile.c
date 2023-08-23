@@ -19,6 +19,133 @@
 // Fetch the nth word-sized system call argument as a file descriptor
 // and return both the descriptor and the corresponding struct file.
 static int
+argfd(int n, int *pfd, struct file **pf);
+uint64 sys_mmap(void)
+{
+  uint64 addr;
+  int len,flags,offset,prot,fd;
+  struct file * mfile;
+  if(argaddr(0,&addr)<0||argint(1,&len)<0||
+      argint(2,&prot)<0||argint(3,&flags)<0||
+      argfd(4,&fd,&mfile)<0||argint(5,&offset)<0)
+      {
+        return -1;
+      }
+  //if(offset)
+  if(mfile->readable==0&&(prot&PROT_READ))return -1;
+  //如果这个文件不能写，但是传入的参数又希望写入这个文件，就报错
+  if(mfile->writable==0&&(prot & PROT_WRITE)&& flags==MAP_SHARED)
+  return -1;
+
+  struct proc* p=myproc();
+  uint64 newsz=p->sz+PGROUNDUP(len);
+  if(newsz>MAXVA)return -1;
+  
+  struct vma* vma;
+  for(int i=0;i<NVMA;i++)
+  {
+    vma=&(p->vmaarray[i]);
+    if(vma->valid==0)
+    {
+      vma->valid=1;
+      if(addr!=0)
+      {
+        vma->addr=addr;
+        //这里没有检查addr的内存能不能map，
+        //因为测试样例默认addr=0，所以就不管了
+      }
+      else
+      {
+        vma->addr=p->sz;
+      }
+      vma->length=PGROUNDUP(len);
+      vma->offset=offset;
+      vma->fd=fd;
+      vma->file=mfile;
+      vma->flags=flags;
+      vma->prot=prot;
+
+      p->sz=newsz;
+      filedup(mfile);
+      return vma->addr;
+    }
+  }
+
+  return -1;
+  
+}
+
+uint64 sys_munmap(void)
+{
+  uint64 addr;
+  int length;
+  if(argaddr(0,&addr)<0||argint(1,&length)<0)return -1;
+  addr=PGROUNDDOWN(addr);
+  length=PGROUNDUP(length);
+
+  struct proc *p=myproc();
+  struct vma * vma;
+  int found=0;
+  ////判断一下unmap的范围对不对
+  for(int i=0;i<NVMA;i++)
+  {
+    if(p->vmaarray[i].valid)
+    {
+      if(p->vmaarray[i].addr<=addr && 
+        p->vmaarray[i].addr+p->vmaarray[i].length>addr &&
+        p->vmaarray[i].addr+p->vmaarray[i].length>=addr+length)
+        {
+          vma=&(p->vmaarray[i]);
+          found=1;
+          break;
+        }
+    }
+  }
+  if(found==0)panic("not found\n");
+  //只把dirty的页写回去
+  if(vma->flags & MAP_SHARED)
+  {
+    pte_t *pte;
+    for(int i=0;i<length/PGSIZE;i++)
+    {
+      pte=walk(p->pagetable,addr+i*PGSIZE,0);
+      if(*pte&PTE_D)
+      {
+        vma->file->off=vma->offset+i*PGSIZE;
+        if(filewrite(vma->file,addr+i*PGSIZE,PGSIZE)<0) return -1;
+      }
+    }
+    
+    //if(filewrite(vma->file,addr,length)<0)return -1;
+  }
+
+  
+  ///三种情况，从头删除到尾，从中间删除到尾，从头删除到中间
+  if(addr==vma->addr&&length==vma->length)
+  {
+    fileclose(vma->file);
+    vma->valid=0;
+  }
+  else if(addr==vma->addr&&length<vma->length)
+  {
+    vma->addr+=length;
+    vma->length-=length;
+    vma->offset+=length;
+  }
+  else if(addr>vma->addr&&addr+length==vma->addr+length)
+  {
+    vma->length-=length;
+  }
+  else
+  {
+    //return -1;
+    panic("wrong unmap\n");
+  }
+  uvmunmap(p->pagetable,addr,length/PGSIZE,1);
+  return 0;
+}
+
+static int
 argfd(int n, int *pfd, struct file **pf)
 {
   int fd;

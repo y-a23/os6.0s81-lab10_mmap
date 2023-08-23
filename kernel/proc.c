@@ -5,7 +5,11 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
-
+#include "fs.h"
+#include "sleeplock.h"
+#include "file.h"
+#include "fcntl.h"
+#include "fcntl.h"
 struct cpu cpus[NCPU];
 
 struct proc proc[NPROC];
@@ -284,6 +288,12 @@ fork(void)
 
   np->parent = p;
 
+  for(int i=0;i<NVMA;i++)
+  {
+    memmove(np->vmaarray+i,p->vmaarray+i,sizeof(np->vmaarray[i]));
+    if(np->vmaarray[i].valid)
+    filedup(np->vmaarray[i].file);
+  }
   // copy saved user registers.
   *(np->trapframe) = *(p->trapframe);
 
@@ -350,6 +360,29 @@ exit(int status)
       struct file *f = p->ofile[fd];
       fileclose(f);
       p->ofile[fd] = 0;
+    }
+  }
+
+  for(int i=0;i<NVMA;i++)
+  {
+    if(p->vmaarray[i].valid)
+    {
+      if(p->vmaarray[i].flags & MAP_SHARED)
+      {
+        pte_t *pte;
+        for(int j=0;j<(p->vmaarray[i].length/PGSIZE);j++)
+        {
+          pte=walk(p->pagetable,p->vmaarray[i].addr+j*PGSIZE,0);
+          if(*pte&PTE_D)
+          {
+            p->vmaarray[i].file->off=p->vmaarray[i].offset+j*PGSIZE;
+            if(filewrite(p->vmaarray[i].file,p->vmaarray[i].addr+j*PGSIZE,PGSIZE)<0)
+            panic("exit error\n");
+          }
+        }
+        fileclose(p->vmaarray[i].file);
+        p->vmaarray[i].valid=0;
+      }
     }
   }
 
